@@ -1,16 +1,101 @@
-import { useState, useEffect } from 'react';
+import { useState, useRef } from 'react';
 import XLSX from 'xlsx-js-style';
 import { saveAs } from 'file-saver';
 
-// ── Security ──────────────────────────────────────────────────────────────────
-const ALLOWED_ORIGINS = new Set([
-  'https://app.sigmacomputing.com',
-  'http://localhost:3000',
-  'http://localhost:5173',
-]);
-
 // ── Column widths (character width units) ─────────────────────────────────────
 const COL_WIDTHS = [12, 11.5, 19, 26, 23.5, 22.5, 27, 9.5, 5.5, 14, 5.5, 13.5];
+
+// ── Expected CSV columns ───────────────────────────────────────────────────────
+const EXPECTED_COLUMNS = [
+  'Asset Name', 'Asset Type', 'Make Name', 'Model Number', 'Serial Number',
+  'Asset Location', 'Property Zone Served', 'Subject', 'Note', 'Property Name',
+  'Billing Customer Name', 'Property Address Line 1', 'Property Address Line 2',
+  'Property City', 'Property State', 'Property Zipcode',
+];
+
+// ── CSV parsing ────────────────────────────────────────────────────────────────
+function parseCSVLine(line) {
+  const fields = [];
+  let field = '';
+  let inQuotes = false;
+  let i = 0;
+  while (i < line.length) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (i + 1 < line.length && line[i + 1] === '"') {
+          field += '"';
+          i += 2;
+        } else {
+          inQuotes = false;
+          i++;
+        }
+      } else {
+        field += ch;
+        i++;
+      }
+    } else {
+      if (ch === '"') {
+        inQuotes = true;
+        i++;
+      } else if (ch === ',') {
+        fields.push(field);
+        field = '';
+        i++;
+      } else {
+        field += ch;
+        i++;
+      }
+    }
+  }
+  fields.push(field);
+  return fields;
+}
+
+function parseCSV(text) {
+  const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  while (lines.length && lines[lines.length - 1].trim() === '') lines.pop();
+  if (lines.length === 0) return { headers: [], rows: [] };
+
+  const headers = parseCSVLine(lines[0]);
+  const rows = lines.slice(1).map(line => {
+    const values = parseCSVLine(line);
+    const row = {};
+    for (let i = 0; i < headers.length; i++) {
+      const val = i < values.length ? values[i] : '';
+      row[headers[i]] = val === '' ? null : val;
+    }
+    return row;
+  });
+
+  return { headers, rows };
+}
+
+// ── XLSX parsing ───────────────────────────────────────────────────────────────
+function parseXLSX(arrayBuffer) {
+  const wb = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+  if (raw.length === 0) return { headers: [], rows: [] };
+
+  const headers = raw[0].map(h => (h == null ? '' : String(h).trim()));
+  const rows = raw.slice(1).map(rawRow => {
+    const row = {};
+    for (let i = 0; i < headers.length; i++) {
+      const cell = i < rawRow.length ? rawRow[i] : '';
+      if (cell === '' || cell == null) {
+        row[headers[i]] = null;
+      } else {
+        // Convert to string; strip trailing .0 from numbers stored as floats
+        const str = String(cell).replace(/\.0$/, '');
+        row[headers[i]] = str === '' ? null : str;
+      }
+    }
+    return row;
+  });
+
+  return { headers, rows };
+}
 
 // ── Data transformation helpers ───────────────────────────────────────────────
 function classifySubject(subject) {
@@ -304,79 +389,68 @@ function exportToExcel(properties) {
   saveAs(new Blob([buf], { type: 'application/octet-stream' }), filename);
 }
 
-// ── Sample data (dev mode only) ───────────────────────────────────────────────
-const SAMPLE_PAYLOAD = {
-  type: 'sigma-export',
-  payload: {
-    rows: [
-      {
-        'Asset Name': 'RTU-1', 'Asset Type': 'RTU', 'Make Name': 'ICP',
-        'Model Number': 'RGS102HDCA0AATA', 'Serial Number': 'P185143950',
-        'Asset Location': 'Building G', 'Property Zone Served': null,
-        'Subject': 'Filters', 'Note': '(4) 20x20x2',
-        'Property Name': 'Combined Public Comm - Bldg G',
-        'Billing Customer Name': 'Combined Public Comm',
-        'Property Address Line 1': '100 Aqua Drive',
-        'Property Address Line 2': 'Building G',
-        'Property City': 'Cold Spring', 'Property State': 'KY', 'Property Zipcode': '41076',
-      },
-      {
-        'Asset Name': 'RTU-1', 'Asset Type': 'RTU', 'Make Name': 'ICP',
-        'Model Number': 'RGS102HDCA0AATA', 'Serial Number': 'P185143950',
-        'Asset Location': 'Building G', 'Property Zone Served': null,
-        'Subject': 'Belt', 'Note': 'A48',
-        'Property Name': 'Combined Public Comm - Bldg G',
-        'Billing Customer Name': 'Combined Public Comm',
-        'Property Address Line 1': '100 Aqua Drive',
-        'Property Address Line 2': 'Building G',
-        'Property City': 'Cold Spring', 'Property State': 'KY', 'Property Zipcode': '41076',
-      },
-      {
-        'Asset Name': 'AHU-1', 'Asset Type': 'Air Handler',
-        'Make Name': 'Trane', 'Model Number': 'TUX1D100A9601AA',
-        'Serial Number': '6085PD97G', 'Asset Location': 'Mechanical Room',
-        'Property Zone Served': '2nd Floor', 'Subject': 'Filter', 'Note': '24x24x1',
-        'Property Name': 'Acme HVAC - Main St',
-        'Billing Customer Name': 'Acme HVAC',
-        'Property Address Line 1': '500 Main St', 'Property Address Line 2': null,
-        'Property City': 'Cincinnati', 'Property State': 'OH', 'Property Zipcode': '45202',
-      },
-      {
-        'Asset Name': 'Furnace-1', 'Asset Type': 'Furnace',
-        'Make Name': 'Trane', 'Model Number': 'TUX1D100A9601AB',
-        'Serial Number': '6173X787G', 'Asset Location': 'Ceiling',
-        'Property Zone Served': '1st Floor',
-        'Subject': 'Filters and Belts',
-        'Note': '(2) 16x25x1 filters / BX54 belt',
-        'Property Name': 'Acme HVAC - Main St',
-        'Billing Customer Name': 'Acme HVAC',
-        'Property Address Line 1': '500 Main St', 'Property Address Line 2': null,
-        'Property City': 'Cincinnati', 'Property State': 'OH', 'Property Zipcode': '45202',
-      },
-    ],
-  },
-};
-
 // ── App ───────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [appData, setAppData] = useState(null);
-  const isDevMode = window.location.hostname === 'localhost';
+  const [appData, setAppData]       = useState(null);
+  const [fileName, setFileName]     = useState(null);
+  const [uploadError, setUploadError] = useState(null);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const fileInputRef = useRef(null);
 
-  useEffect(() => {
-    function onMessage(event) {
-      if (!ALLOWED_ORIGINS.has(event.origin)) return;
-      const msg = event.data;
-      if (!msg || msg.type !== 'sigma-export') return;
-      const rows = msg.payload?.rows;
-      if (!Array.isArray(rows)) return;
+  function handleFile(file) {
+    if (!file) return;
+    setUploadError(null);
+    const ext = file.name.split('.').pop().toLowerCase();
+    const reader = new FileReader();
+
+    function onParsed({ headers, rows }) {
+      const missing = EXPECTED_COLUMNS.filter(col => !headers.includes(col));
+      if (missing.length > 0) {
+        setUploadError('columns');
+        return;
+      }
+      setFileName(file.name);
       setAppData(transformRows(rows));
     }
-    window.addEventListener('message', onMessage);
-    return () => window.removeEventListener('message', onMessage);
-  }, []);
 
-  function loadSampleData() {
-    setAppData(transformRows(SAMPLE_PAYLOAD.payload.rows));
+    if (ext === 'csv') {
+      reader.onload = (e) => onParsed(parseCSV(e.target.result));
+      reader.readAsText(file);
+    } else if (ext === 'xlsx' || ext === 'xls') {
+      reader.onload = (e) => onParsed(parseXLSX(e.target.result));
+      reader.readAsArrayBuffer(file);
+    } else {
+      setUploadError('filetype');
+    }
+  }
+
+  function handleReset() {
+    setAppData(null);
+    setFileName(null);
+    setUploadError(null);
+    // Reset the file input so the same file can be re-selected
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  }
+
+  function onDragOver(e) {
+    e.preventDefault();
+    if (!isDragOver) setIsDragOver(true);
+  }
+
+  function onDragLeave(e) {
+    if (!e.currentTarget.contains(e.relatedTarget)) {
+      setIsDragOver(false);
+    }
+  }
+
+  function onDrop(e) {
+    e.preventDefault();
+    setIsDragOver(false);
+    handleFile(e.dataTransfer.files[0]);
+  }
+
+  function onFileInputChange(e) {
+    handleFile(e.target.files[0]);
   }
 
   function handleExport() {
@@ -415,11 +489,6 @@ export default function App() {
           place-items: unset;
           text-align: left;
         }
-        @keyframes pulse {
-          0%, 100% { opacity: 1; }
-          50%       { opacity: 0.35; }
-        }
-        .pma-pulse { animation: pulse 2.2s ease-in-out infinite; }
         .pma-btn {
           padding: 6px 16px;
           font-size: 13px;
@@ -431,6 +500,17 @@ export default function App() {
         }
         .pma-btn:hover:not(:disabled) { opacity: 0.85; }
         .pma-btn:disabled { cursor: not-allowed; }
+        .pma-reset-link {
+          background: none;
+          border: none;
+          padding: 0;
+          font-family: Arial, sans-serif;
+          font-size: 12px;
+          color: #2d5f96;
+          cursor: pointer;
+          text-decoration: underline;
+        }
+        .pma-reset-link:hover { color: #1B3A5C; }
       `}</style>
 
       <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: '#fff' }}>
@@ -448,61 +528,125 @@ export default function App() {
           <span style={{ fontSize: 15, fontWeight: 'bold', letterSpacing: 0.2 }}>
             PMA Worksheet Export
           </span>
-
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-            {isDevMode && (
-              <button
-                className="pma-btn"
-                onClick={loadSampleData}
-                style={{
-                  background: '#2d5f96',
-                  color: '#fff',
-                  border: '1px solid #5589c0',
-                }}
-              >
-                Load Sample Data
-              </button>
-            )}
-            <button
-              className="pma-btn"
-              onClick={handleExport}
-              disabled={!appData}
-              style={{
-                background: appData ? '#ffffff' : '#3d5a73',
-                color:      appData ? '#1B3A5C' : '#7aa0be',
-                border:     appData ? '1px solid #ccc' : '1px solid #2e4d63',
-              }}
-            >
-              Export Excel
-            </button>
-          </div>
+          <button
+            className="pma-btn"
+            onClick={handleExport}
+            disabled={!appData}
+            style={{
+              background: appData ? '#ffffff' : '#3d5a73',
+              color:      appData ? '#1B3A5C' : '#7aa0be',
+              border:     appData ? '1px solid #ccc' : '1px solid #2e4d63',
+            }}
+          >
+            Export Excel
+          </button>
         </header>
 
         {/* ── Main content ── */}
         <main style={{ flex: 1, padding: 18 }}>
 
           {!appData ? (
-            /* Waiting state */
+            /* ── Upload state ── */
             <div style={{
               display: 'flex',
+              flexDirection: 'column',
               alignItems: 'center',
-              justifyContent: 'center',
-              height: 220,
+              paddingTop: 48,
             }}>
-              <p className="pma-pulse" style={{ color: '#999', fontSize: 15 }}>
-                Waiting for data from Sigma...
-              </p>
+              {/* Drop zone */}
+              <div
+                onDragOver={onDragOver}
+                onDragLeave={onDragLeave}
+                onDrop={onDrop}
+                style={{
+                  border: `2px dashed ${isDragOver ? '#1B3A5C' : '#b0bcd8'}`,
+                  borderRadius: 6,
+                  background: isDragOver ? '#edf1f8' : '#f8f9fb',
+                  padding: '44px 64px',
+                  textAlign: 'center',
+                  maxWidth: 520,
+                  width: '100%',
+                  transition: 'border-color 0.15s, background 0.15s',
+                }}
+              >
+                <div style={{ fontSize: 15, fontWeight: 'bold', color: '#1B3A5C', marginBottom: 8 }}>
+                  Drop your Sigma export here
+                </div>
+                <div style={{ fontSize: 13, color: '#777', marginBottom: 24, lineHeight: 1.5 }}>
+                  Supports CSV and Excel (.xlsx) files
+                </div>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".csv,.xlsx,.xls"
+                  style={{ display: 'none' }}
+                  onChange={onFileInputChange}
+                />
+                <button
+                  className="pma-btn"
+                  onClick={() => fileInputRef.current?.click()}
+                  style={{ background: '#1B3A5C', color: '#fff', border: 'none' }}
+                >
+                  Choose File
+                </button>
+              </div>
+
+              {/* Error message */}
+              {uploadError && (
+                <div style={{
+                  marginTop: 14,
+                  maxWidth: 520,
+                  width: '100%',
+                  fontSize: 13,
+                  color: '#b03020',
+                  background: '#fdf3f2',
+                  border: '1px solid #e8c4be',
+                  borderRadius: 4,
+                  padding: '9px 14px',
+                }}>
+                  {uploadError === 'filetype'
+                    ? 'Please upload a CSV or Excel file.'
+                    : 'This file is missing expected columns. Make sure you exported the Asset with Asset Notes table from Sigma.'
+                  }
+                </div>
+              )}
+
+              {/* How-to instructions */}
+              <div style={{ marginTop: 32, maxWidth: 520, width: '100%' }}>
+                <div style={{ fontSize: 12, color: '#aaa', marginBottom: 5, fontWeight: 'bold' }}>
+                  How to export from Sigma:
+                </div>
+                <ol style={{
+                  fontSize: 12,
+                  color: '#aaa',
+                  paddingLeft: 20,
+                  lineHeight: 1.9,
+                  margin: 0,
+                }}>
+                  <li>Open your Sigma workbook</li>
+                  <li>Filter the Asset with Asset Notes table to the properties you want</li>
+                  <li>Click the element menu (&#8943;) on the table</li>
+                  <li>Choose Export &#8594; CSV</li>
+                  <li>Drop the downloaded file here</li>
+                </ol>
+              </div>
             </div>
           ) : (
-            /* Ready state */
+            /* ── Ready state ── */
             <>
               {/* Summary line */}
-              <div style={{ marginBottom: 14, fontSize: 13, color: '#555' }}>
+              <div style={{ marginBottom: 4, fontSize: 13, color: '#555' }}>
                 <strong style={{ color: '#1B3A5C' }}>{appData.properties.length}</strong>
                 {' '}properties&nbsp;&nbsp;·&nbsp;&nbsp;
                 <strong style={{ color: '#1B3A5C' }}>{appData.totalAssets}</strong>
                 {' '}assets&nbsp;&nbsp;·&nbsp;&nbsp;
-                {today}
+                {today}&nbsp;&nbsp;·&nbsp;&nbsp;
+                <span style={{ color: '#888' }}>{fileName}</span>
+              </div>
+              <div style={{ marginBottom: 14 }}>
+                <button className="pma-reset-link" onClick={handleReset}>
+                  Upload a different file
+                </button>
               </div>
 
               {/* Scrollable preview table */}
