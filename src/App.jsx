@@ -409,8 +409,10 @@ export default function App() {
         setUploadError('columns');
         return;
       }
+      const transformed = transformRows(rows);
       setFileName(file.name);
-      setAppData(transformRows(rows));
+      setAppData(transformed);
+      exportToExcel(transformed.properties);
     }
 
     if (ext === 'csv') {
@@ -458,16 +460,13 @@ export default function App() {
     exportToExcel(appData.properties);
   }
 
-  // Build preview list: up to 20 asset rows, interleaved with property group labels
+  // Build full data list: all properties and assets
   const previewItems = [];
   if (appData) {
-    let assetCount = 0;
-    outer: for (const { meta, assets } of appData.properties) {
+    for (const { meta, assets } of appData.properties) {
       previewItems.push({ kind: 'group', label: meta.propertyName });
       for (const asset of assets) {
         previewItems.push({ kind: 'asset', asset });
-        assetCount++;
-        if (assetCount >= 20) break outer;
       }
     }
   }
@@ -570,7 +569,7 @@ export default function App() {
                 }}
               >
                 <div style={{ fontSize: 15, fontWeight: 'bold', color: '#1B3A5C', marginBottom: 8 }}>
-                  Drop your Sigma export here
+                  Drop or Upload your Assets file here
                 </div>
                 <div style={{ fontSize: 13, color: '#777', marginBottom: 24, lineHeight: 1.5 }}>
                   Supports CSV and Excel (.xlsx) files
@@ -611,49 +610,63 @@ export default function App() {
                 </div>
               )}
 
-              {/* How-to instructions */}
-              <div style={{ marginTop: 32, maxWidth: 520, width: '100%' }}>
-                <div style={{ fontSize: 12, color: '#aaa', marginBottom: 5, fontWeight: 'bold' }}>
-                  How to export from Sigma:
-                </div>
-                <ol style={{
-                  fontSize: 12,
-                  color: '#aaa',
-                  paddingLeft: 20,
-                  lineHeight: 1.9,
-                  margin: 0,
-                }}>
-                  <li>Open your Sigma workbook</li>
-                  <li>Filter the Asset with Asset Notes table to the properties you want</li>
-                  <li>Click the element menu (&#8943;) on the table</li>
-                  <li>Choose Export &#8594; CSV</li>
-                  <li>Drop the downloaded file here</li>
-                </ol>
-              </div>
             </div>
           ) : (
             /* ── Ready state ── */
             <>
+              {/* Download confirmation banner */}
+              <div style={{
+                marginBottom: 16,
+                padding: '10px 14px',
+                background: '#edfaf1',
+                border: '1px solid #82c99a',
+                borderRadius: 4,
+                fontSize: 13,
+                color: '#1a5c33',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+              }}>
+                <span style={{ fontSize: 17, lineHeight: 1 }}>&#10003;</span>
+                <span>
+                  Your PMA Worksheet has been downloaded — check your Downloads folder.
+                  Use the <strong>Export Excel</strong> button above to download it again.
+                </span>
+              </div>
+
               {/* Summary line */}
               <div style={{ marginBottom: 4, fontSize: 13, color: '#555' }}>
                 <strong style={{ color: '#1B3A5C' }}>{appData.properties.length}</strong>
-                {' '}properties&nbsp;&nbsp;·&nbsp;&nbsp;
+                {' '}{appData.properties.length === 1 ? 'property' : 'properties'}&nbsp;&nbsp;·&nbsp;&nbsp;
                 <strong style={{ color: '#1B3A5C' }}>{appData.totalAssets}</strong>
                 {' '}assets&nbsp;&nbsp;·&nbsp;&nbsp;
                 {today}&nbsp;&nbsp;·&nbsp;&nbsp;
                 <span style={{ color: '#888' }}>{fileName}</span>
               </div>
-              <div style={{ marginBottom: 14 }}>
+              <div style={{ marginBottom: 12 }}>
                 <button className="pma-reset-link" onClick={handleReset}>
                   Upload a different file
                 </button>
               </div>
 
-              {/* Scrollable preview table */}
+              {/* Full data notice */}
+              <div style={{
+                marginBottom: 10,
+                fontSize: 12,
+                color: '#666',
+                lineHeight: 1.6,
+              }}>
+                The table below shows all <strong>{appData.totalAssets}</strong> assets
+                across all <strong>{appData.properties.length}</strong> {appData.properties.length === 1 ? 'property' : 'properties'} from
+                your file — scroll down to review the complete data.
+              </div>
+
+              {/* Full data table — fixed-height scrollable window */}
               <div style={{
                 overflowX: 'auto',
                 overflowY: 'auto',
-                maxHeight: 480,
+                maxHeight: 'calc(100vh - 280px)',
+                minHeight: 200,
                 border: '1px solid #d0d7e2',
                 borderRadius: 3,
               }}>
